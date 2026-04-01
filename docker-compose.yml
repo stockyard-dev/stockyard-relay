@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  relay:
+    build: .
+    ports:
+      - "9090:9090"
+    environment:
+      - PORT=9090
+      - DATA_DIR=/data
+      - RELAY_LICENSE_KEY=
+    volumes:
+      - relay_data:/data
+    restart: unless-stopped
+volumes:
+  relay_data:
