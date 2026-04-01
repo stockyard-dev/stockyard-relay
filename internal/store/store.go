@@ -1,59 +1,21 @@
 package store
-
-import (
-	"database/sql"
-	"fmt"
-	"os"
-	"path/filepath"
-
-	_ "modernc.org/sqlite"
-)
-
-type DB struct {
-	*sql.DB
-}
-
-func Open(dataDir string) (*DB, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return nil, fmt.Errorf("mkdir: %w", err)
-	}
-	dsn := filepath.Join(dataDir, "relay.db") + "?_journal_mode=WAL&_busy_timeout=5000"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
-	}
-	db.SetMaxOpenConns(1)
-	if err := migrate(db); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	return &DB{db}, nil
-}
-
-func migrate(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        description TEXT,
-        schema TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-     );
-     CREATE TABLE IF NOT EXISTS subscriptions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id INTEGER NOT NULL,
-        callback_url TEXT NOT NULL,
-        secret TEXT,
-        active INTEGER DEFAULT 1,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-     );
-     CREATE TABLE IF NOT EXISTS deliveries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        subscription_id INTEGER NOT NULL,
-        payload TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        attempts INTEGER DEFAULT 0,
-        last_attempt_at DATETIME,
-        delivered_at DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-     );`)
-	return err
-}
+import("database/sql";"fmt";"os";"path/filepath";"time";_ "modernc.org/sqlite")
+type DB struct{*sql.DB}
+type Event struct{ID int64 `json:"id"`;Name string `json:"name"`;Description string `json:"description"`;CreatedAt time.Time `json:"created_at"`}
+type Subscription struct{ID int64 `json:"id"`;EventID int64 `json:"event_id"`;EventName string `json:"event_name,omitempty"`;CallbackURL string `json:"callback_url"`;Secret string `json:"secret"`;Active bool `json:"active"`;CreatedAt time.Time `json:"created_at"`}
+type Delivery struct{ID int64 `json:"id"`;SubscriptionID int64 `json:"subscription_id"`;Payload string `json:"payload"`;Status string `json:"status"`;Attempts int `json:"attempts"`;ResponseCode int `json:"response_code"`;ErrorMsg string `json:"error"`;DeliveredAt *time.Time `json:"delivered_at"`;CreatedAt time.Time `json:"created_at"`}
+func Open(dataDir string)(*DB,error){if err:=os.MkdirAll(dataDir,0755);err!=nil{return nil,fmt.Errorf("mkdir: %w",err)};dsn:=filepath.Join(dataDir,"relay.db")+"?_journal_mode=WAL&_busy_timeout=5000";db,err:=sql.Open("sqlite",dsn);if err!=nil{return nil,fmt.Errorf("open: %w",err)};db.SetMaxOpenConns(1);if err:=migrate(db);err!=nil{return nil,fmt.Errorf("migrate: %w",err)};return &DB{db},nil}
+func migrate(db *sql.DB)error{_,err:=db.Exec(`CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT DEFAULT '',created_at DATETIME DEFAULT CURRENT_TIMESTAMP);CREATE TABLE IF NOT EXISTS subscriptions(id INTEGER PRIMARY KEY AUTOINCREMENT,event_id INTEGER NOT NULL,callback_url TEXT NOT NULL,secret TEXT DEFAULT '',active INTEGER DEFAULT 1,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);CREATE TABLE IF NOT EXISTS deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,subscription_id INTEGER NOT NULL,payload TEXT NOT NULL,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,response_code INTEGER DEFAULT 0,error TEXT DEFAULT '',delivered_at DATETIME,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);return err}
+func(db *DB)ListEvents()([]Event,error){rows,err:=db.Query(`SELECT id,name,description,created_at FROM events ORDER BY created_at DESC`);if err!=nil{return nil,err};defer rows.Close();var out[]Event;for rows.Next(){var e Event;rows.Scan(&e.ID,&e.Name,&e.Description,&e.CreatedAt);out=append(out,e)};return out,nil}
+func(db *DB)CreateEvent(e *Event)error{res,err:=db.Exec(`INSERT INTO events(name,description)VALUES(?,?)`,e.Name,e.Description);if err!=nil{return err};e.ID,_=res.LastInsertId();return nil}
+func(db *DB)GetEventByName(name string)(*Event,error){e:=&Event{};err:=db.QueryRow(`SELECT id,name,description,created_at FROM events WHERE name=?`,name).Scan(&e.ID,&e.Name,&e.Description,&e.CreatedAt);if err==sql.ErrNoRows{return nil,nil};return e,err}
+func(db *DB)DeleteEvent(id int64)error{_,err:=db.Exec(`DELETE FROM events WHERE id=?`,id);return err}
+func(db *DB)ListSubscriptions()([]Subscription,error){rows,err:=db.Query(`SELECT s.id,s.event_id,COALESCE(e.name,''),s.callback_url,s.secret,s.active,s.created_at FROM subscriptions s LEFT JOIN events e ON e.id=s.event_id ORDER BY s.created_at DESC`);if err!=nil{return nil,err};defer rows.Close();var out[]Subscription;for rows.Next(){var s Subscription;rows.Scan(&s.ID,&s.EventID,&s.EventName,&s.CallbackURL,&s.Secret,&s.Active,&s.CreatedAt);out=append(out,s)};return out,nil}
+func(db *DB)GetSubsForEvent(eventID int64)([]Subscription,error){rows,err:=db.Query(`SELECT id,event_id,'',callback_url,secret,active,created_at FROM subscriptions WHERE event_id=? AND active=1`,eventID);if err!=nil{return nil,err};defer rows.Close();var out[]Subscription;for rows.Next(){var s Subscription;rows.Scan(&s.ID,&s.EventID,&s.EventName,&s.CallbackURL,&s.Secret,&s.Active,&s.CreatedAt);out=append(out,s)};return out,nil}
+func(db *DB)CreateSubscription(s *Subscription)error{res,err:=db.Exec(`INSERT INTO subscriptions(event_id,callback_url,secret)VALUES(?,?,?)`,s.EventID,s.CallbackURL,s.Secret);if err!=nil{return err};s.ID,_=res.LastInsertId();return nil}
+func(db *DB)DeleteSubscription(id int64)error{_,err:=db.Exec(`DELETE FROM subscriptions WHERE id=?`,id);return err}
+func(db *DB)CreateDelivery(d *Delivery)error{res,err:=db.Exec(`INSERT INTO deliveries(subscription_id,payload,status)VALUES(?,?,'pending')`,d.SubscriptionID,d.Payload);if err!=nil{return err};d.ID,_=res.LastInsertId();return nil}
+func(db *DB)UpdateDelivery(d *Delivery)error{_,err:=db.Exec(`UPDATE deliveries SET status=?,attempts=?,response_code=?,error=?,delivered_at=? WHERE id=?`,d.Status,d.Attempts,d.ResponseCode,d.ErrorMsg,d.DeliveredAt,d.ID);return err}
+func(db *DB)ListDeliveries(limit int)([]Delivery,error){rows,err:=db.Query(`SELECT id,subscription_id,payload,status,attempts,response_code,error,delivered_at,created_at FROM deliveries ORDER BY created_at DESC LIMIT ?`,limit);if err!=nil{return nil,err};defer rows.Close();var out[]Delivery;for rows.Next(){var d Delivery;rows.Scan(&d.ID,&d.SubscriptionID,&d.Payload,&d.Status,&d.Attempts,&d.ResponseCode,&d.ErrorMsg,&d.DeliveredAt,&d.CreatedAt);out=append(out,d)};return out,nil}
+func(db *DB)CountEvents()(int,error){var n int;db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&n);return n,nil}
+func(db *DB)CountDeliveries()(int,error){var n int;db.QueryRow(`SELECT COUNT(*) FROM deliveries`).Scan(&n);return n,nil}
